@@ -1,5 +1,5 @@
 # Etapa 1: compilar TypeScript
-FROM node:24-alpine AS build
+FROM node:25-alpine AS build
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
@@ -8,13 +8,13 @@ COPY src ./src
 RUN npm run build
 
 # Etapa 2: instalar solo las dependencias de producción
-FROM node:24-alpine AS deps
+FROM node:25-alpine AS deps
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev
 
 # Etapa 3: solo lo necesario para ejecutar
-FROM node:24-alpine
+FROM node:25-alpine
 # Instalamos los parches de seguridad de Alpine que aún no trae la imagen (Trivy)
 # y quitamos npm: la API no lo necesita para arrancar y trae librerías con fallos
 RUN apk upgrade --no-cache \
