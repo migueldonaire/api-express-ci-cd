@@ -1,0 +1,91 @@
+# De main a producción de la API (sesiones 05 y 06)
+name: release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write # para crear el tag y la release
+
+concurrency: release # nunca dos releases a la vez
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      created: ${{ steps.tag.outputs.created }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Leer la versión de package.json
+        id: version
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Crear tag y GitHub Release (si la versión es nueva)
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if gh release view "v$VERSION" > /dev/null 2>&1; then
+            echo "La versión $VERSION ya existe: no hay release nueva"
+            echo "created=false" >> "$GITHUB_OUTPUT"
+          else
+            gh release create "v$VERSION" --target "$GITHUB_SHA" --generate-notes
+            echo "created=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  publish:
+    needs: release
+    if: needs.release.outputs.created == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Login en Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build y push de la imagen
+        uses: docker/build-push-action@v7
+        with:
+          push: true
+          build-args: VERSION=${{ needs.release.outputs.version }}
+          tags: |
+            ${{ vars.DOCKERHUB_USERNAME }}/api:${{ needs.release.outputs.version }}
+            ${{ vars.DOCKERHUB_USERNAME }}/api:latest
+
+  deploy-test:
+    needs: [release, publish]
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: test
+      version: ${{ needs.release.outputs.version }}
+    secrets: inherit
+
+  dast:
+    needs: deploy-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Análisis dinámico con OWASP ZAP
+        uses: zaproxy/action-baseline@v0.15.0
+        with:
+          target: ${{ vars.TEST_URL }}
+          allow_issue_writing: false
+          fail_action: false
+
+  deploy-prod: # espera a que alguien apruebe el entorno production
+    needs: [release, deploy-test, dast]
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: production
+      version: ${{ needs.release.outputs.version }}
+    secrets: inherit

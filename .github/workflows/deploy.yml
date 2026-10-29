@@ -1,0 +1,60 @@
+# Desplegar una versión ya publicada: la usa release.yml y sirve para rollback (sesiones 04 y 05)
+name: deploy
+
+on:
+  workflow_dispatch: # botón "Run workflow": rollback o redespliegue
+    inputs:
+      environment:
+        description: "Entorno"
+        type: environment
+        required: true
+      version:
+        description: "Versión ya publicada, p. ej. 1.2.0"
+        type: string
+        required: true
+  workflow_call: # para usarla desde release.yml
+    inputs:
+      environment:
+        type: string
+        required: true
+      version:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ vars.APP_URL }}
+    steps:
+      - name: Pedir a Render que despliegue la imagen
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+          IMAGE: docker.io/${{ vars.DOCKERHUB_USERNAME }}/api:${{ inputs.version }}
+        run: curl -fsS -X POST "$HOOK&imgURL=$(jq -rn --arg v "$IMAGE" '$v|@uri')"
+
+      - name: Smoke test (¿responde la versión nueva?)
+        env:
+          URL: ${{ vars.APP_URL }}/api/health
+          VERSION: ${{ inputs.version }}
+        run: |
+          for i in $(seq 1 30); do
+            if [ "$(curl -fsS "$URL" | jq -r .version || true)" = "$VERSION" ]; then
+              echo "OK: la versión $VERSION está en línea"
+              exit 0
+            fi
+            echo "Esperando a Render... ($i/30)"
+            sleep 10
+          done
+          echo "La versión $VERSION no responde"
+          exit 1
+
+      - name: Resumen
+        run: |
+          echo "### Desplegada la versión ${{ inputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Entorno: ${{ inputs.environment }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- URL: ${{ vars.APP_URL }}" >> "$GITHUB_STEP_SUMMARY"
